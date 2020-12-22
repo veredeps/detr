@@ -12,12 +12,17 @@ import torch
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
+from mlflow import log_metric, log_param, log_artifacts
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
-    model.train()
+    model.eval()
+    model.bbox_embed.train()
+    #model.transformer.decoder.train()
+    model.transformer.train()
+    model.transformer.encoder.eval()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -28,6 +33,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        samples = utils.NestedTensorAnno(samples.tensors, samples.mask, torch.stack([box['boxes'][0] for box in targets]))
 
         outputs = model(samples)
         loss_dict = criterion(outputs, targets)
@@ -58,6 +64,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'] if 'class_error' in loss_dict_reduced else 0)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        for loss_name, loss_val in loss_dict.items():
+            log_metric(loss_name, loss_val.item())
+        log_metric('total_loss', loss_value)
+        log_metric('lr', optimizer.param_groups[0]["lr"])
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
@@ -102,7 +113,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
                              **loss_dict_reduced_scaled,
                              **loss_dict_reduced_unscaled)
-        metric_logger.update(class_error=loss_dict_reduced['class_error'])
+        metric_logger.update(class_error=loss_dict_reduced['class_error'] if 'class_error' in loss_dict_reduced else 0)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)

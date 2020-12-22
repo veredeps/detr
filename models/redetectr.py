@@ -9,7 +9,7 @@ from torch import nn
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized)
+                       is_dist_avail_and_initialized, NestedTensorAnno)
 
 from .backbone import build_backbone
 from .matcher import build_matcher
@@ -18,8 +18,24 @@ from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
 from .transformer import build_transformer
 
 
-class DETR(nn.Module):
+# TODO:
+# 1. DETR receive two images - done
+# 2. run backbone on both images - done
+# 3. feed second image features in too decoder instead of query_embed with positional encoding - done
+# 4. vectorize results and feed to a regressor - HOW??? currently vectorize results and run several stages of mlp
+# 5. change loss, no need for bi-partite loss - criterion - done
+# 6. remove classifier (maybe add later?)
+# 7. set model to eval, train from decoder to output - done
+# 8. build redetectr form detr - done
+# 9. train small data set to see overfit
+# 10. train on big dataset with minimal augmentation to see convergence
+# 11. think of appropriate augmentation
+# 12. set image to a fixed size - currently 640*480
+# 13. parametrize bbox_embed from image size
+
+class REDETECTR(nn.Module):
     """ This is the DETR module that performs object detection """
+
     def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
@@ -34,6 +50,7 @@ class DETR(nn.Module):
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
+        self.score_embed = nn.Linear(hidden_dim, 2)  # target - background classifier
         self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
@@ -41,7 +58,7 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.aux_loss = aux_loss
 
-    def forward(self, samples: NestedTensor):
+    def forward(self, samples: NestedTensorAnno):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -58,15 +75,27 @@ class DETR(nn.Module):
         """
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
-        features, pos = self.backbone(samples)
 
-        src, mask = features[-1].decompose()
-        assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+        template = NestedTensor(samples.tensors[:, 0:3, :, :], samples.mask)
+        search = NestedTensor(samples.tensors[:, 3:, :, :], samples.mask)
+        template_features, template_pos = self.backbone(template)
+        search_features, search_pos = self.backbone(search)
+
+        template_src, template_mask = template_features[-1].decompose()
+        assert template_mask is not None
+        search_src, search_mask = search_features[-1].decompose()
+        assert search_mask is not None
+
+        hs = self.transformer(self.input_proj(template_src), template_mask, self.input_proj(search_src), search_pos[-1])[0]
 
         outputs_class = self.class_embed(hs)
+
+        # s = hs.shape
+        # outputs_coord = self.bbox_embed(hs.reshape((s[0], s[1], -1))).sigmoid()
+        outputs_score = self.score_embed(hs)
+        outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_score': outputs_score[-1]}
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         return out
@@ -86,6 +115,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
+
     def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
         """ Create the criterion.
         Parameters:
@@ -97,7 +127,7 @@ class SetCriterion(nn.Module):
         """
         super().__init__()
         self.num_classes = num_classes
-        self.matcher = matcher
+        #self.matcher = matcher
         self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
@@ -146,9 +176,9 @@ class SetCriterion(nn.Module):
            The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
         """
         assert 'pred_boxes' in outputs
-        idx = self._get_src_permutation_idx(indices)
-        src_boxes = outputs['pred_boxes'][idx]
-        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        #idx = self._get_src_permutation_idx(indices)
+        src_boxes = outputs['pred_boxes']
+        target_boxes = torch.stack([t['boxes'][1] for t in targets])
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
 
@@ -222,14 +252,16 @@ class SetCriterion(nn.Module):
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
 
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets)
+        #indices = self.matcher(outputs_without_aux, targets)
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+        #num_boxes = sum(len(t["labels"]) for t in targets)
+        #num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+        #if is_dist_avail_and_initialized():
+        #    torch.distributed.all_reduce(num_boxes)
+        #num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+        indices = torch.zeros(1)
+        num_boxes = len(targets)  # one box for each target
 
         # Compute all the requested losses
         losses = {}
@@ -257,6 +289,7 @@ class SetCriterion(nn.Module):
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -311,31 +344,24 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     num_classes = 91 if args.dataset_file != 'coco' else 91
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
 
     transformer = build_transformer(args)
 
-    model = DETR(
+    model = REDETECTR(
         backbone,
         transformer,
         num_classes=num_classes,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
     )
-    if args.masks:
-        model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
+
     matcher = build_matcher(args)
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
-    if args.masks:
-        weight_dict["loss_mask"] = args.mask_loss_coef
-        weight_dict["loss_dice"] = args.dice_loss_coef
+
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
@@ -343,17 +369,32 @@ def build(args):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         weight_dict.update(aux_weight_dict)
 
-    losses = ['labels', 'boxes', 'cardinality']
-    if args.masks:
-        losses += ["masks"]
+    losses = ['boxes']
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
-    if args.masks:
-        postprocessors['segm'] = PostProcessSegm()
-        if args.dataset_file == "coco_panoptic":
-            is_thing_map = {i: i <= 90 for i in range(201)}
-            postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
 
+    return model, criterion, postprocessors
+
+
+def build_from_detr(args, detr_model, detr_criterion, detr_postprocessors):
+    num_classes = 91 if args.dataset_file != 'coco' else 91
+    device = torch.device(args.device)
+
+    model = REDETECTR(
+        detr_model.backbone,
+        detr_model.transformer,
+        num_classes=num_classes,
+        num_queries=args.num_queries,
+        aux_loss=args.aux_loss,
+    )
+    model.to(device)
+    losses = ['boxes']
+    weight_dict = {'loss_bbox': args.bbox_loss_coef}
+    weight_dict['loss_giou'] = args.giou_loss_coef
+    criterion = SetCriterion(num_classes, matcher=None, weight_dict=weight_dict,
+                             eos_coef=args.eos_coef, losses=losses)
+    criterion.to(device)
+    postprocessors = {'bbox': PostProcess()}
     return model, criterion, postprocessors
