@@ -3,6 +3,7 @@ import torch.utils.data
 import torchvision
 
 from .coco import build as build_coco
+from .you_tube import build as build_youtube
 
 
 def get_coco_api_from_dataset(dataset):
@@ -16,6 +17,8 @@ def get_coco_api_from_dataset(dataset):
 
 
 def build_dataset(image_set, args):
+    if args.dataset_file == 'youtube':
+        return build_youtube(image_set, args)
     if args.dataset_file == 'coco':
         return build_coco(image_set, args)
     if args.dataset_file == 'coco_panoptic':

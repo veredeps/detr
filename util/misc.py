@@ -303,6 +303,15 @@ class NestedTensor(object):
         return str(self.tensors)
 
 
+
+class NestedTensorAnno(NestedTensor):
+    def __init__(self, tensors, mask: Optional[Tensor], anno):
+        super(NestedTensorAnno, self).__init__(tensors, mask)
+        self.anno = anno
+
+    def decompose(self):
+        return self.tensors, self.mask, self.anno
+
 def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
     # TODO make this more general
     if tensor_list[0].ndim == 3:
