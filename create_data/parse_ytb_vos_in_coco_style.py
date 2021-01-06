@@ -19,6 +19,7 @@ import cv2
 from os.path import join
 import random
 import matplotlib.pyplot as plt
+from PIL import Image
 import time
 
 random.seed(123456)
@@ -86,15 +87,16 @@ class Instance(object):
 
 
 def  update_res_train_cat(res_train, categories):
-    for ind, cat in enumerate(categories):
-        cat_dict = {"supercategory": cat, "id": ind, "name": cat}
+    for cat_id, cat in enumerate(categories):
+        cat_dict = {"supercategory": cat, "id": cat_id, "name": cat}
         res_train['categories'].append(cat_dict)
 
 
 def extract_search_data(res):
-
+    #extract ann dir
     vid1 = res['images'][00000]['video_name']
     ann_dir = res['images'][00000]['anno_path'].split(vid1)[0]
+
     for ann_ind , ann in enumerate(res['annotations']):
         template_fr = ann['template_image_name'].split('.')[0]
         if template_fr in ann['fr_in_vid']:
@@ -103,12 +105,13 @@ def extract_search_data(res):
             print('check why wrong fr_in_vid', ann['video_name'], 'template_fr:', template_fr, 'obId:',ann['objId'],'id:',ann['id'] )
             #log_file.write('check why wrong fr_in_vid' + ann['video_name']+ 'template_fr:'+ template_fr+ 'obId:'+ann['objId']+'id:'+ ann['id'] )
 
-        if ((ind+1) < len(ann['fr_in_vid']) ):
-            search_ind = random.randint(ind+1,len(ann['fr_in_vid']) - 1)
-        else:
-            search_ind = ind
-            print('template ind is last ind in fr_in_vid check why ! set search to template ind ', ann['video_name'], 'template_fr:', template_fr, 'obId:',ann['objId'],'id:',ann['id'])
-            #log_file.write('template ind is last ind in fr_in_vid  check why !' + ann['video_name']+ 'template_fr:'+ template_fr+ 'obId:'+ann['objId']+'id:'+ ann['id'] )
+        search_ind = random.randint(0, len(ann['fr_in_vid']) - 1)   # find the search frame in all video frames
+        #if ((ind+1) < len(ann['fr_in_vid']) ):
+        #    search_ind = random.randint(ind+1,len(ann['fr_in_vid']) - 1)
+        #else:
+        #    search_ind = ind
+        #    print('template ind is last ind in fr_in_vid check why ! set search to template ind ', ann['video_name'], 'template_fr:', template_fr, 'obId:',ann['objId'],'id:',ann['id'])
+        #    #log_file.write('template ind is last ind in fr_in_vid  check why !' + ann['video_name']+ 'template_fr:'+ template_fr+ 'obId:'+ann['objId']+'id:'+ ann['id'] )
 
         search_fr = ann['fr_in_vid'][search_ind]
         if search_ind > (len(ann['frames_unique_id'])-1):
@@ -194,22 +197,94 @@ def extract_search_data(res):
     return res
 
 
+
+
+"""
+def clear_obj_frames_with_no_anno(res):
+
+    vid1 = res['images'][00000]['video_name']
+    ann_dir = res['images'][00000]['anno_path'].split(vid1)[0]
+    for  ann in res['annotations']:
+        for frame in ann['fr_in_vid']:
+            file_name = join(ann['video_name'], frame)
+            fullname = os.path.join(ann_dir, file_name + '.png')
+            img = cv2.imread(fullname, 0)
+            mask = (img == ann['objId']).astype(np.uint8)
+            if ann['objId'] not in np.unique(img):
+                ann['fr_in_vid'].remove(frame)
+    return res
+"""
+def clear_obj_frames_with_no_anno(frames, ann_dir, json_ann, video):
+    for frame in frames:
+        file_name = join(video, frame)
+        fullname = os.path.join(ann_dir, file_name + '.png')
+
+        pil_image = Image.open(fullname)
+        palette = np.array(pil_image.getpalette(), dtype=np.uint8).reshape((256, 3))
+        na = np.array(pil_image.convert('RGB'))
+        colors = np.unique(na.reshape(-1, 3), axis=0)
+        ind_in_img = [palette.tolist().index(colors.tolist()[i]).__str__() for i, _ in enumerate(colors.tolist())]
+        #img = cv2.imread(fullname, 0)
+        #image_with_idx = plt.imread(fullname)  # 4 entry reflects the index that from it e can conclue the category  the fourth entry is not read wiht cv2 !!
+        #ind_in_img = [int(a).__str__() for a in np.unique(image_with_idx[:, :, 3]).tolist()]
+        for obj_ind in json_ann['videos'][video]['objects']:
+            if obj_ind not in ind_in_img and frame in json_ann['videos'][video]['objects'][obj_ind]['frames'] :
+                json_ann['videos'][video]['objects'][obj_ind]['frames'].remove(frame)
+
+    return json_ann
+
+
+#   clears frames_with_no_anno  and also  clears_obj_frames_with_no_anno
 def clear_frames_with_no_anno(frames, ann_dir, json_ann, video):
     frames_with_anno = frames.copy()
     for frame in frames:
         file_name = join(video, frame)
         fullname = os.path.join(ann_dir, file_name + '.png')
-        img = cv2.imread(fullname, 0)
-        if np.sum(img) == 0:  # skip and remove images with no annotation
+        #img = cv2.imread(fullname, 0)
+
+        pil_image = Image.open(fullname)
+
+
+        #if np.sum(img) == 0:  # skip and remove images with no annotation
+        if np.sum(pil_image) == 0:  # skip and remove images with no annotation
             frames_with_anno.remove(frame)
-            print(video, ' ', frame, 'frame with no anno ')
-            log_file.write(video + ' ' + frame + 'frame with no anno ')
+            #print(video, ' ', 'frame', frame, ' with no anno ')
+            #log_file.write(video + ' ' + 'frame'+ frame +'with no anno\n ')
             for i, ob in enumerate(json_ann['videos'][video]['objects']):
                 if frame in json_ann['videos'][video]['objects'][ob]['frames']:
                     json_ann['videos'][video]['objects'][ob]['frames'].remove(frame)  # remove frames with no annotations from list to be cohetent with frames_unique_id size
-            continue
+        else:  #clear_obj_frames_with_no_anno
+            palette = np.array(pil_image.getpalette(), dtype=np.uint8).reshape((256, 3))
+            na = np.array(pil_image.convert('RGB'))
+            colors = np.unique(na.reshape(-1, 3), axis=0)
+            ind_in_img = [palette.tolist().index(colors.tolist()[i]).__str__() for i, _ in enumerate(colors.tolist())]
+            for obj_ind in json_ann['videos'][video]['objects']:
+                if obj_ind not in ind_in_img and frame in json_ann['videos'][video]['objects'][obj_ind]['frames']:
+                    json_ann['videos'][video]['objects'][obj_ind]['frames'].remove(frame)
+                    #print(video, ' ', frame,' ',  'obj_id  ', obj_ind,' with no anno ')
+                    #log_file.write(video + ' ' + frame + ' ' + 'obj_id  ' + obj_ind + ' with no anno\n ')
+
     return frames_with_anno, json_ann
 
+
+
+def im2object_ind(fullname, ind1, ind2):
+
+    pil_image = Image.open(fullname)
+    palette = np.array(pil_image.getpalette(), dtype=np.uint8).reshape((256, 3))
+    na = np.array(pil_image.convert('RGB'))
+    object_ind = palette.tolist().index(na[ind1, ind2, :].tolist())
+    return object_ind
+
+
+def add_cat(categories, object_dict):
+    cat = object_dict['category']
+    if cat not in categories.keys():
+        cat_len = len(categories)
+        categories[cat] = cat_len
+        object_dict['cat_id'] = cat_len
+    else:
+        object_dict['cat_id'] = categories[cat]
 
 def convert_ytb_vos(data_dir, out_dir, log_file):
 
@@ -230,7 +305,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
     json_name = '%s.json'
     num_obj = 0
     num_ann = 0
-    categories = []
+    categories = {}
     t1 = time.time()
 
     for data_set, ann_dir in zip(sets, ann_dirs):
@@ -244,7 +319,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
             is_train = random.uniform(0, 1) > 0.14
             #if video  == '01baa5a4e1':    #'011ac0a06f'
             #   print('wait')
-            #if vid > 5:  #debug only
+            #if vid < 200 or  vid > 205 :  #debug only
             #    continue
             v = json_ann['videos'][video]
             frames = []
@@ -257,7 +332,9 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
             instanceIds = []
             json_ann['videos'][video].update({'frames_unique_id': []})
 
+
             frames_with_anno, json_ann = clear_frames_with_no_anno(frames,  ann_dir ,json_ann, video)
+            #json_ann = clear_obj_frames_with_no_anno(frames, ann_dir, json_ann, video)
 
             for frame in frames_with_anno:
                 file_name = join(video, frame)
@@ -266,7 +343,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
 
                 h, w = img.shape[:2]
 
-                image_with_idx = plt.imread(fullname)  # 4 entry reflects the index that from it e can conclue the category  the fourth entry is not read wiht cv2 !!
+                #image_with_idx = plt.imread(fullname)  # 4 entry reflects the index that from it e can conclue the category  the fourth entry is not read wiht cv2 !!
 
                 #debug only
                 #from PIL import Image
@@ -300,11 +377,15 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                     mask = (img == instanceId).astype(np.uint8)
                     ind_non_zero = np.argwhere(np.asarray(mask) > 0)
 
-                    ind1 = ind_non_zero[int(ind_non_zero.shape[0]/2)][0]
-                    ind2 = ind_non_zero[int(ind_non_zero.shape[0]/2)][1]
+                    ind1 = ind_non_zero[0][0]
+                    ind2 = ind_non_zero[0][1]
 
-                    idx_of_obj = image_with_idx[ind1, ind2,3]
-                    idx_oob  = int(idx_of_obj.item()).__str__()
+                    idx_oob = im2object_ind(fullname, ind1,  ind2).__str__()
+
+                    #idx_of_obj = image_with_idx[ind1, ind2,3]
+                    #idx_oob  = int(idx_of_obj.item()).__str__()
+
+
 
                     if idx_oob in json_ann['videos'][video]['objects'].keys():
                         instanceObj_dict['category'] = json_ann['videos'][video]['objects'][idx_oob]['category']
@@ -312,7 +393,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                     else:
                         continue
 
-                    categories.append(instanceObj_dict['category'])
+                    add_cat(categories, instanceObj_dict)
 
 
                     #_, contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, #cv2.CHAIN_APPROX_NONE)
@@ -332,7 +413,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                 for objId in objects:
                     if len(objects[objId]) == 0:
                         continue
-                    template_valid_frame = frame in objects[objId]['fr_in_vid'] and frame != objects[objId]['fr_in_vid'][-1]
+                    template_valid_frame = frame in objects[objId]['fr_in_vid'] # and frame != objects[objId]['fr_in_vid'][-1]
                     if objId > 0  and template_valid_frame:
                     # if objId > 0 and frame != frames_with_anno[-1] and frame != frames_with_anno[-2] and frame in objects[objId]['fr_in_vid']:
                         obj = objects[objId]
@@ -353,14 +434,12 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                         ann['template_image_id'] = im_unique_id
                         ann['template_image_name'] = image_path.split('/')[-1]
                         ann['template_bbox'] = xyxy_to_xywh(polys_to_boxes([obj['contours']])).tolist()[0]
-                        ann['category_id'] = obj['category']
+                        ann['category_id'] = obj['cat_id']
+                        ann['category'] = obj['category']
                         ann['video_name'] = video
                         ann['id'] = obj_unique_id
-
-
                         ann['fr_in_vid'] = obj['fr_in_vid']  # frames where obj exists
                         ann['frames_unique_id'] =[]
-
                         ann['objId'] = int(objId)
 
                         obj_unique_id = obj_unique_id + 1
@@ -401,8 +480,8 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
         print("Num Objects: %d" % num_obj)
         print("Num Annotations: %d" % num_ann)
 
-        update_res_train_cat(res_train, set(categories))
-        update_res_train_cat(res_val, set(categories))
+        update_res_train_cat(res_train, categories)
+        update_res_train_cat(res_val, categories)
 
         if res_val['categories'] !=  res_train['categories']:
             print('problem: cat in val are likecat in train !')
@@ -410,8 +489,12 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
         t11 = time.time()
         print('elapsed time =  ' + str(t11 - t1))
 
-        extract_search_data( res_train)
-        extract_search_data( res_val)
+
+
+
+        #move the following  to  getItem() during traning
+        #extract_search_data( res_train)
+        #extract_search_data( res_val)
 
         with open(os.path.join(out_dir, json_name % 'train'), 'w') as outfile:
             json.dump(res_train, outfile)
@@ -421,17 +504,6 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
 
         t2 = time.time()
         print('elapsed time =  ' + str(t2-t1))
-
-        #items = list(ann_dict.items())
-        #train_dict = dict(items[:3000])
-        #val_dict = dict(items[3000:])
-        #with open(os.path.join(out_dir, json_name % 'train'), 'w') as outfile:
-        #    json.dump(train_dict, outfile)
-        #with open(os.path.join(out_dir, json_name % 'val'), 'w') as outfile:
-        #    json.dump(val_dict, outfile)
-
-
-
 
 
 if __name__ == '__main__':
