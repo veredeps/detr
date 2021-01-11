@@ -92,7 +92,7 @@ def  update_res_train_cat(res_train, categories):
         res_train['categories'].append(cat_dict)
 
 
-def extract_search_data(res):
+def extract_search_data_old(res):
     #extract ann dir
     vid1 = res['images'][00000]['video_name']
     ann_dir = res['images'][00000]['anno_path'].split(vid1)[0]
@@ -197,6 +197,63 @@ def extract_search_data(res):
     return res
 
 
+def extract_search_data(res):
+    # extract ann dir
+    vid1 = res['images'][00000]['video_name']
+    ann_dir = res['images'][00000]['anno_path'].split(vid1)[0]
+
+    for ann_ind, ann in enumerate(res['annotations']):
+        template_fr = ann['template_image_name'].split('.')[0]
+        search_ind = random.randint(0, len(ann['fr_in_vid']) - 1)  # find the search frame in all video frames
+        search_fr = ann['fr_in_vid'][search_ind]
+        file_name = join(ann['video_name'], search_fr)
+        fullname = os.path.join(ann_dir, file_name + '.png')
+        #img = cv2.imread(fullname, 0)
+        #mask = (img == ann['objId']).astype(np.uint8)
+        #contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        #polygons = [c.reshape(-1).tolist() for c in contour]
+        #obj_contours = [p for p in polygons if len(p) > 4]
+
+        #if len(obj_contours) == 0 or len(obj_contours[0]) == 0:
+        #    ann['image_id'] = ann['template_image_id']
+        #    ann['image_name'] = ann['template_image_name']
+        #    ann['bbox'] = ann['template_bbox']
+        #else:
+
+        search_image_unique_id = ann['frames_unique_id'][search_ind]
+        ann['image_id'] = search_image_unique_id
+        ann['image_name'] = search_fr + '.jpg'
+        #ann['bbox'] = xyxy_to_xywh(polys_to_boxes([obj_contours])).tolist()[0]  # search bbox
+        ann['bbox'] = ann['bboxes'][search_fr]
+
+        # just for debug
+        # dispay bbox on image
+        """
+        from PIL import Image
+        from PIL import ImageDraw
+
+        fig, ax  = plt.subplots(nrows=1, ncols = 2)
+
+        pil_im = Image.open(fullname).convert("RGBA")
+        draw = ImageDraw.Draw(pil_im)
+        #xmin, ymin, xmax, ymax = polys_to_boxes([obj_contours]).tolist()[0]
+        xmin, ymin, xmax, ymax = ann['bbox']
+        draw.rectangle(((xmin, ymin), (xmax+xmin, ymax+ymin)),  outline = 'yellow', width = 4)
+        ax[0].imshow(pil_im)
+        #pil_im.show()
+
+        full_name_template=os.path.join(ann_dir, ann['video_name']+'/'+ ann['template_image_name'].split('.')[0]+'.png')
+        pil_im = Image.open(full_name_template).convert("RGBA")
+        draw = ImageDraw.Draw(pil_im)
+        #xmin, ymin, xmax, ymax = polys_to_boxes([obj_contours]).tolist()[0]
+        xmin, ymin, xmax, ymax = ann['template_bbox']
+        draw.rectangle(((xmin, ymin), (xmax+xmin, ymax+ymin)),  outline = 'yellow', width = 4)
+        ax[1].imshow(pil_im)
+
+        plt.close(fig)
+
+        """
+    return res
 
 
 """
@@ -213,6 +270,7 @@ def clear_obj_frames_with_no_anno(res):
             if ann['objId'] not in np.unique(img):
                 ann['fr_in_vid'].remove(frame)
     return res
+"""
 """
 def clear_obj_frames_with_no_anno(frames, ann_dir, json_ann, video):
     for frame in frames:
@@ -233,9 +291,12 @@ def clear_obj_frames_with_no_anno(frames, ann_dir, json_ann, video):
 
     return json_ann
 
-
-#   clears frames_with_no_anno  and also  clears_obj_frames_with_no_anno
+"""
+#   clears frames_with_no_anno  and also  clears_obj_frames_with_no_anno   and create dict for  each object in  anno of {frame:bbox}
 def clear_frames_with_no_anno(frames, ann_dir, json_ann, video):
+    for obj in json_ann['videos'][video]['objects'].keys():
+        json_ann['videos'][video]['objects'][obj]['bboxes'] = {}
+
     frames_with_anno = frames.copy()
     for frame in frames:
         file_name = join(video, frame)
@@ -244,25 +305,43 @@ def clear_frames_with_no_anno(frames, ann_dir, json_ann, video):
 
         pil_image = Image.open(fullname)
 
-
+        # skip and remove images with no annotation
         #if np.sum(img) == 0:  # skip and remove images with no annotation
-        if np.sum(pil_image) == 0:  # skip and remove images with no annotation
+        if np.sum(pil_image) == 0:
             frames_with_anno.remove(frame)
             #print(video, ' ', 'frame', frame, ' with no anno ')
             #log_file.write(video + ' ' + 'frame'+ frame +'with no anno\n ')
             for i, ob in enumerate(json_ann['videos'][video]['objects']):
                 if frame in json_ann['videos'][video]['objects'][ob]['frames']:
                     json_ann['videos'][video]['objects'][ob]['frames'].remove(frame)  # remove frames with no annotations from list to be cohetent with frames_unique_id size
-        else:  #clear_obj_frames_with_no_anno
+        else:  #clears_obj_frames_with_no_anno
             palette = np.array(pil_image.getpalette(), dtype=np.uint8).reshape((256, 3))
             na = np.array(pil_image.convert('RGB'))
             colors = np.unique(na.reshape(-1, 3), axis=0)
             ind_in_img = [palette.tolist().index(colors.tolist()[i]).__str__() for i, _ in enumerate(colors.tolist())]
             for obj_ind in json_ann['videos'][video]['objects']:
+                # clear_obj_frames_with_no_anno
                 if obj_ind not in ind_in_img and frame in json_ann['videos'][video]['objects'][obj_ind]['frames']:
                     json_ann['videos'][video]['objects'][obj_ind]['frames'].remove(frame)
                     #print(video, ' ', frame,' ',  'obj_id  ', obj_ind,' with no anno ')
                     #log_file.write(video + ' ' + frame + ' ' + 'obj_id  ' + obj_ind + ' with no anno\n ')
+
+                # calc all bbox of obj in vid
+                elif obj_ind in ind_in_img and frame in json_ann['videos'][video]['objects'][obj_ind]['frames']:
+                    mask = (na == palette[int(obj_ind)].tolist()).astype(np.uint8)
+                    mask = (1*(np.sum(mask,2) > 0)).astype(np.uint8)
+                    contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                    polygons = [c.reshape(-1).tolist() for c in contour]
+                    contours = [p for p in polygons if len(p) > 4]
+
+                    if len(contours) == 0 or len(contours[0]) == 0:
+                        json_ann['videos'][video]['objects'][obj_ind]['frames'].remove(frame)
+                    else:
+                        bbox = xyxy_to_xywh(polys_to_boxes([contours])).tolist()[0]
+                        json_ann['videos'][video]['objects'][obj_ind]['bboxes'].update({frame: bbox})
+
+
+
 
     return frames_with_anno, json_ann
 
@@ -319,7 +398,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
             is_train = random.uniform(0, 1) > 0.14
             #if video  == '01baa5a4e1':    #'011ac0a06f'
             #   print('wait')
-            #if vid < 200 or  vid > 205 :  #debug only
+            #if vid <20 or  vid >25: #debug only
             #    continue
             v = json_ann['videos'][video]
             frames = []
@@ -333,6 +412,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
             json_ann['videos'][video].update({'frames_unique_id': []})
 
 
+            #clear bad annotations and add to json_ann for eavh obect all bboxes in all frames
             frames_with_anno, json_ann = clear_frames_with_no_anno(frames,  ann_dir ,json_ann, video)
             #json_ann = clear_obj_frames_with_no_anno(frames, ann_dir, json_ann, video)
 
@@ -390,21 +470,22 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                     if idx_oob in json_ann['videos'][video]['objects'].keys():
                         instanceObj_dict['category'] = json_ann['videos'][video]['objects'][idx_oob]['category']
                         instanceObj_dict['fr_in_vid'] = json_ann['videos'][video]['objects'][idx_oob]['frames']
+                        instanceObj_dict['bboxes'] = json_ann['videos'][video]['objects'][idx_oob]['bboxes']
                     else:
                         continue
 
                     add_cat(categories, instanceObj_dict)
 
 
-                    #_, contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, #cv2.CHAIN_APPROX_NONE)
+                    ##_, contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, #cv2.CHAIN_APPROX_NONE)
                     contour, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
                     polygons = [c.reshape(-1).tolist() for c in contour]
                     instanceObj_dict['contours'] = [p for p in polygons if len(p) > 4]
                     if len(instanceObj_dict['contours']) and instanceObj_dict['pixelCount'] > 1000:
                         objects[instanceId] = instanceObj_dict
-                    # else:
-                    #     cv2.imshow("disappear?", mask)
-                    #     cv2.waitKey(0)
+                    ## else:
+                    ##     cv2.imshow("disappear?", mask)
+                    ##     cv2.waitKey(0)
 
                 #objId = 0 #init value
                 #if bool(objects):  #check if there  are objects
@@ -417,10 +498,10 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                     if objId > 0  and template_valid_frame:
                     # if objId > 0 and frame != frames_with_anno[-1] and frame != frames_with_anno[-2] and frame in objects[objId]['fr_in_vid']:
                         obj = objects[objId]
-                        len_p = [len(p) for p in obj['contours']]
-                        if min(len_p) <= 4:
-                            print('Warning: invalid contours.')
-                            continue  # skip non-instance categories
+                        #len_p = [len(p) for p in obj['contours']]
+                        #if min(len_p) <= 4:
+                        #    print('Warning: invalid contours.')
+                        #    continue  # skip non-instance categories
 
                         ann = dict()
                         #ann['h'] = h
@@ -439,6 +520,7 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
                         ann['video_name'] = video
                         ann['id'] = obj_unique_id
                         ann['fr_in_vid'] = obj['fr_in_vid']  # frames where obj exists
+                        ann['bboxes']  = obj['bboxes']  # bboxes in all frames where obj exists
                         ann['frames_unique_id'] =[]
                         ann['objId'] = int(objId)
 
@@ -483,8 +565,8 @@ def convert_ytb_vos(data_dir, out_dir, log_file):
         update_res_train_cat(res_train, categories)
         update_res_train_cat(res_val, categories)
 
-        if res_val['categories'] !=  res_train['categories']:
-            print('problem: cat in val are likecat in train !')
+        if res_val['categories'] != res_train['categories']:
+            print('problem: cat in val are  not like cat in train !')
 
         t11 = time.time()
         print('elapsed time =  ' + str(t11 - t1))
