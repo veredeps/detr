@@ -35,7 +35,7 @@ class DETRsegm(nn.Module):
         self.mask_head = MaskHeadSmallConv(hidden_dim + nheads, [1024, 512, 256], hidden_dim)
 
     def forward(self, samples: NestedTensor):
-        if not isinstance(samples, NestedTensor):
+        if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.detr.backbone(samples)
 
@@ -164,7 +164,7 @@ class MHAttentionMap(nn.Module):
 
         if mask is not None:
             weights.masked_fill_(mask.unsqueeze(1).unsqueeze(1), float("-inf"))
-        weights = F.softmax(weights.flatten(2), dim=-1).view_as(weights)
+        weights = F.softmax(weights.flatten(2), dim=-1).view(weights.size())
         weights = self.dropout(weights)
         return weights
 
@@ -284,7 +284,7 @@ class PostProcessPanoptic(nn.Module):
             cur_scores = cur_scores[keep]
             cur_classes = cur_classes[keep]
             cur_masks = cur_masks[keep]
-            cur_masks = interpolate(cur_masks[None], to_tuple(size), mode="bilinear").squeeze(0)
+            cur_masks = interpolate(cur_masks[:, None], to_tuple(size), mode="bilinear").squeeze(1)
             cur_boxes = box_ops.box_cxcywh_to_xyxy(cur_boxes[keep])
 
             h, w = cur_masks.shape[-2:]

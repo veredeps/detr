@@ -3,6 +3,8 @@ import io
 import unittest
 
 import torch
+from torch import nn, Tensor
+from typing import List
 
 from models.matcher import HungarianMatcher
 from models.position_encoding import PositionEmbeddingSine, PositionEmbeddingLearned
@@ -100,6 +102,26 @@ class Tester(unittest.TestCase):
         out = model([x])
         self.assertIn('pred_logits', out)
 
+    def test_warpped_model_script_detection(self):
+        class WrappedDETR(nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+
+            def forward(self, inputs: List[Tensor]):
+                sample = nested_tensor_from_tensor_list(inputs)
+                return self.model(sample)
+
+        model = detr_resnet50(pretrained=False)
+        wrapped_model = WrappedDETR(model)
+        wrapped_model.eval()
+        scripted_model = torch.jit.script(wrapped_model)
+        x = [torch.rand(3, 200, 200), torch.rand(3, 200, 250)]
+        out = wrapped_model(x)
+        out_script = scripted_model(x)
+        self.assertTrue(out["pred_logits"].equal(out_script["pred_logits"]))
+        self.assertTrue(out["pred_boxes"].equal(out_script["pred_boxes"]))
+
 
 @unittest.skipIf(onnxruntime is None, 'ONNX Runtime unavailable')
 class ONNXExporterTester(unittest.TestCase):
@@ -164,6 +186,21 @@ class ONNXExporterTester(unittest.TestCase):
             [(torch.rand(1, 3, 750, 800),)],
             input_names=["inputs"],
             output_names=["pred_logits", "pred_boxes"],
+            tolerate_small_mismatch=True,
+        )
+
+    @unittest.skip("CI doesn't have enough memory")
+    def test_model_onnx_detection_panoptic(self):
+        model = detr_resnet50_panoptic(pretrained=False).eval()
+        dummy_image = torch.ones(1, 3, 800, 800) * 0.3
+        model(dummy_image)
+
+        # Test exported model on images of different size, or dummy input
+        self.run_model(
+            model,
+            [(torch.rand(1, 3, 750, 800),)],
+            input_names=["inputs"],
+            output_names=["pred_logits", "pred_boxes", "pred_masks"],
             tolerate_small_mismatch=True,
         )
 

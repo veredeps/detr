@@ -13,9 +13,13 @@ from torch.utils.data import DataLoader, DistributedSampler
 import datasets
 import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
-from engine import evaluate, train_one_epoch
+from engine_redetectr import evaluate, train_one_epoch
 from models import build_model
+from models import build_redetectr_model
+from models.redetectr import build_from_detr
 
+from mlflow import log_metric, log_param, log_artifacts
+import git
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -81,6 +85,8 @@ def get_args_parser():
     # dataset parameters
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
+    parser.add_argument('--youtube_json_path', type=str)
+    parser.add_argument('--youtube_image_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -90,6 +96,7 @@ def get_args_parser():
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
+    parser.add_argument('--resume_type', default='DETR', help='type of resume DETR or REDETECTR')
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
@@ -99,6 +106,7 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--dont_test_dirty_repo', action='store_true')
     return parser
 
 
@@ -118,7 +126,14 @@ def main(args):
     np.random.seed(seed)
     random.seed(seed)
 
-    model, criterion, postprocessors = build_model(args)
+    dataset_train = build_dataset(image_set='train', args=args)
+    #dataset_train.__getitem__(0)
+    dataset_val = build_dataset(image_set='val', args=args)
+
+    if args.resume_type == 'DETR':
+        model, criterion, postprocessors = build_model(args)
+    else:
+        model, criterion, postprocessors = build_redetectr_model(args)
     model.to(device)
 
     model_without_ddp = model
@@ -139,8 +154,8 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    dataset_train = build_dataset(image_set='train', args=args)
-    dataset_val = build_dataset(image_set='val', args=args)
+    #dataset_train = build_dataset(image_set='train', args=args)
+    #dataset_val = build_dataset(image_set='val', args=args)
 
     if args.distributed:
         sampler_train = DistributedSampler(dataset_train)
@@ -156,7 +171,7 @@ def main(args):
                                    collate_fn=utils.collate_fn, num_workers=args.num_workers)
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
-    d=(iter(data_loader_train)).__next__()
+    d = (iter(data_loader_val)).__next__()
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
         coco_val = datasets.coco.build("val", args)
@@ -175,7 +190,15 @@ def main(args):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
+
         model_without_ddp.load_state_dict(checkpoint['model'])
+        if args.resume_type == 'DETR':
+            model, criterion, postprocessors = build_from_detr(args, model_without_ddp, criterion, postprocessors)
+            model_without_ddp = model
+            if args.distributed:
+                model = torch.nn.parallel.DistributedDataParallel(model_without_ddp, device_ids=[args.gpu])
+                model_without_ddp = model.module
+
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
@@ -240,9 +263,36 @@ def main(args):
     print('Training time {}'.format(total_time_str))
 
 
+
 if __name__ == '__main__':
+#    log_param("param1", random.randint(0, 100))
+    # Log a metric; metrics can be updated throughout the run
+#    log_metric("foo", random.random())
+#    log_metric("foo", random.random() + 1)
+#    log_metric("foo", random.random() + 2)
+#    log_artifacts("create_data")
+
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
+
+    if not args.dont_test_dirty_repo:  # we need this because mlflow stores git hash
+        r = git.Repo('')
+        if r.is_dirty():
+            print('\033[91m')
+            print('----------------------------------------------')
+            print('repo is dirty, do you wish to continue [y/n]?')
+            print('----------------------------------------------')
+            print('\033[0m')
+            ans = input()
+            if ans != 'y':
+                exit()
+
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    for k, v in vars(args).items():
+        log_param(k, v)
+
     main(args)
+
+    if args.output_dir:
+        log_artifacts(args.output_dir)

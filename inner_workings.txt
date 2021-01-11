@@ -1,0 +1,68 @@
+detr.py (forward)
+--------------------
+60 - smaples - (batch, image channel, image height, image width) (2,3,873,1201)
+62 - features - (batch, channel, height, width) (2,2048,28,38) in the papaer (B, C, H = H0/32, W = W0/32)
+     pos - (batch, transformer dimentions, height, width) (2,256,28,38) positinal embeting of the features
+66 - just befor transformer src (previously features.trensors) undergoes 2d convolution with kernel 1 via input_poroj, 
+     which reduces the dimentions from 2048 to 256.
+     transformer recieves:
+        - the conculved src (batch, transformer dimentions, height, width) (2,256,28,38)
+        - weights of query embedings (query num, embeding dimentions)  (100, 256)
+        - pos - positinal encoding (batch, transformer dimentions, height, width) (2,256,28,38)
+     transformer outpots hs (encoder/decoder layer num, batch, query num, embeding dimentions) (6, 2, 100, 256)
+68 - outputs_class - output of classifier on hs (encoder/decoder layer num, batch, query num, class num) (6, 2, 100, 92)
+69 - outputs_coord - bbox prediction (encoder/decoder layer num, batch, query num, box_dim) (6, 2, 100, 4)
+70 - out - composed of outputs_class and outputs_coord  by discarding all the layers in results but the last one i.e - 
+     (encoder/decoder layer num, batch, query num, box_dim) -> (batch, query num, box_dim) (2, 100, 4)
+
+transformer.py (forward)
+-------------------------
+input:
+    - src - the convulved src (batch, transformer dimentions, height, width) (B,C,H,W) (2,256,28,38)
+    - mask
+    - query_embed - weights of query embedings  (query num, transformer dimentions) (Q, C) (100, 256)
+    - pos_embed - positinal encoding (batch, transformer dimentions, height, width) (B, C, H, W) (2,256,28,38) 
+    
+50 - src is falttened and permuted - (B,C,H,W)->(H*W,B,C) (1064,2,256)
+51 - pos_embed is falttened and permuted - (B,C,H,W)->(H*W,B,C) (1064,2,256)
+52 - query_embed is reshaped to reflect batch size (Q, C)->(Q,B,C) (100,2,256)
+56 - run ENCODER - memory output of the encoder - (H*W,B,C) (1064,2,256)
+57 - run DECODER - hs - decoder output - (encoder/decoder layer num, query num, batch, embeding dimentions) (6, 100, 2, 256)
+59 - output is reshaped/transformed 
+        - encoder output (hs) - (encoder/decoder layer num, batch, query num, embeding dimentions) (6, 2, 100, 256)
+        - decoder output (memory) (H*W,B,C)->(B,Q,H,W) (1064,2,256)->(2,256,28,38)
+
+
+
+transformer.py TransformerEncoder (forward)
+--------------------------------------------------
+77 - has 6 layers which takes the prev layer output as inpot without alterations 
+     i.e. input and output dimentions are (H*W,B,C) (1064,2,256)
+
+transformer.py TransformerEncoderLayer (forward\forward_post)
+-------------------------------------------------------------------
+154 - generate q & k from src (input) and pos (positinal embedings) - both are just src+pos (H*W,B,C)
+155 - self attention on q,k,src into src2 (H*W,B,C)
+156 - perfrom all encoder operations on src and src2
+
+
+transformer.py TransformerDecoder (forward)
+------------------------------------------------
+input:
+    - tgt zeros (Q, B, C) (100, 2, 256)
+    - memory - output of encoder (H*W,B,C) (1064,2,256)
+    - mask
+    - pos_embed (H*W,B,C) (1064,2,256)
+    - query_embed (Q, B, C) (100, 2, 256)
+107 - has 6 layers which takes the prev layer output as inpot without alterations 
+      i.e. input and output dimentions are (Q, B, C) (100, 2, 256) of eah layer
+      note the each attention layer output is appended to the total result from the decoder
+      i.e. returned resuld is (6, 100, 2, 256)
+
+
+
+
+
+
+
+

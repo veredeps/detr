@@ -57,9 +57,14 @@ def crop(image, target, region):
 
 
 def hflip(image, target):
-    flipped_image = F.hflip(image)
+    if(type(image) == list):
+        flipped_image = [F.hflip(i) for i in image]
+        w, h = image[0].size
+    else:
+        flipped_image = F.hflip(image)
+        w, h = image.size
 
-    w, h = image.size
+
 
     target = target.copy()
     if "boxes" in target:
@@ -102,13 +107,21 @@ def resize(image, target, size, max_size=None):
         else:
             return get_size_with_aspect_ratio(image_size, size, max_size)
 
-    size = get_size(image.size, size, max_size)
-    rescaled_image = F.resize(image, size)
+    if (type(image) == list):
+        size = get_size(image[0].size, size, max_size)
+        rescaled_image = [F.resize(img, size) for img in image]
+        image_size = image[0].size
+        rescaled_image_size = rescaled_image[0].size
+    else:
+        size = get_size(image.size, size, max_size)
+        rescaled_image = F.resize(image, size)
+        image_size = image.size
+        rescaled_image_size = rescaled_image.size
 
     if target is None:
         return rescaled_image, None
 
-    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_image.size, image.size))
+    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_image_size, image_size))
     ratio_width, ratio_height = ratios
 
     target = target.copy()
@@ -160,9 +173,10 @@ class RandomSizeCrop(object):
         self.max_size = max_size
 
     def __call__(self, img: PIL.Image.Image, target: dict):
-        w = random.randint(self.min_size, min(img.width, self.max_size))
-        h = random.randint(self.min_size, min(img.height, self.max_size))
-        region = T.RandomCrop.get_params(img, [h, w])
+        i = img[0] if (type(img) == list) else img
+        w = random.randint(self.min_size, min(i.width, self.max_size))
+        h = random.randint(self.min_size, min(i.height, self.max_size))
+        region = T.RandomCrop.get_params(i, [h, w])
         return crop(img, target, region)
 
 
@@ -199,6 +213,15 @@ class RandomResize(object):
         return resize(img, target, size, self.max_size)
 
 
+class Resize(object):
+    def __init__(self, size):
+        assert isinstance(size, (list, tuple))
+        self.size = size
+
+    def __call__(self, img, target=None):
+        return resize(img, target, self.size)
+
+
 class RandomPad(object):
     def __init__(self, max_pad):
         self.max_pad = max_pad
@@ -227,8 +250,21 @@ class RandomSelect(object):
 
 class ToTensor(object):
     def __call__(self, img, target):
-        return F.to_tensor(img), target
+        if (type(img) == list):
+            image_tensor = [F.to_tensor(i) for i in img]
+            #image_tensor = torch.stack(image_tensor,dim=-1)
+            #image_tensor = torch.cat(image_tensor, 0)
+            return image_tensor, target
+        else:
+            return F.to_tensor(img), target
 
+class ListToTensor(object):
+    def __call__(self, img, target):
+        if (type(img) == list):
+            image_tensor = torch.cat(img, 0)
+            return image_tensor, target
+        else:
+            return img, target
 
 class RandomErasing(object):
 
@@ -245,11 +281,16 @@ class Normalize(object):
         self.std = std
 
     def __call__(self, image, target=None):
-        image = F.normalize(image, mean=self.mean, std=self.std)
+        if type(image) == list:
+            image = [F.normalize(i, mean=self.mean, std=self.std) for i in image ]
+            h, w = image[0].shape[1:3]
+        else:
+            image = F.normalize(image, mean=self.mean, std=self.std)
+            h, w = image.shape[1:3]
         if target is None:
             return image, None
         target = target.copy()
-        h, w = image.shape[-2:]
+
         if "boxes" in target:
             boxes = target["boxes"]
             boxes = box_xyxy_to_cxcywh(boxes)
