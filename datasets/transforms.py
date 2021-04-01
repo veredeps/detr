@@ -23,8 +23,8 @@ def crop(image, target, region):
     target["size"] = torch.tensor([h, w])
 
     fields = ["labels", "area", "iscrowd"]
-
-    if "boxes" in target:
+    boxes_keys = res = [key for key in target.keys() if "boxes" in key]
+    if "boxes" in "boxes":
         boxes = target["boxes"]
         max_size = torch.as_tensor([w, h], dtype=torch.float32)
         cropped_boxes = boxes - torch.as_tensor([j, i, j, i])
@@ -57,14 +57,12 @@ def crop(image, target, region):
 
 
 def hflip(image, target):
-    if(type(image) == list):
+    if (type(image) == list):
         flipped_image = [F.hflip(i) for i in image]
         w, h = image[0].size
     else:
         flipped_image = F.hflip(image)
         w, h = image.size
-
-
 
     target = target.copy()
     if "boxes" in target:
@@ -237,6 +235,7 @@ class RandomSelect(object):
     Randomly selects between transforms1 and transforms2,
     with probability p for transforms1 and (1 - p) for transforms2
     """
+
     def __init__(self, transforms1, transforms2, p=0.5):
         self.transforms1 = transforms1
         self.transforms2 = transforms2
@@ -252,11 +251,12 @@ class ToTensor(object):
     def __call__(self, img, target):
         if (type(img) == list):
             image_tensor = [F.to_tensor(i) for i in img]
-            #image_tensor = torch.stack(image_tensor,dim=-1)
-            #image_tensor = torch.cat(image_tensor, 0)
+            # image_tensor = torch.stack(image_tensor,dim=-1)
+            # image_tensor = torch.cat(image_tensor, 0)
             return image_tensor, target
         else:
             return F.to_tensor(img), target
+
 
 class ListToTensor(object):
     def __call__(self, img, target):
@@ -265,6 +265,7 @@ class ListToTensor(object):
             return image_tensor, target
         else:
             return img, target
+
 
 class RandomErasing(object):
 
@@ -282,7 +283,7 @@ class Normalize(object):
 
     def __call__(self, image, target=None):
         if type(image) == list:
-            image = [F.normalize(i, mean=self.mean, std=self.std) for i in image ]
+            image = [F.normalize(i, mean=self.mean, std=self.std) for i in image]
             h, w = image[0].shape[1:3]
         else:
             image = F.normalize(image, mean=self.mean, std=self.std)
@@ -291,11 +292,12 @@ class Normalize(object):
             return image, None
         target = target.copy()
 
-        if "boxes" in target:
-            boxes = target["boxes"]
-            boxes = box_xyxy_to_cxcywh(boxes)
-            boxes = boxes / torch.tensor([w, h, w, h], dtype=torch.float32)
-            target["boxes"] = boxes
+        for k in target.keys():
+            if "boxes" in k:
+                boxes = target[k]
+                boxes = box_xyxy_to_cxcywh(boxes)
+                boxes = boxes / torch.tensor([w, h, w, h], dtype=torch.float32)
+                target[k] = boxes
         return image, target
 
 

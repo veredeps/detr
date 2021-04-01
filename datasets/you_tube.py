@@ -12,9 +12,11 @@ import torchvision
 from pycocotools import mask as coco_mask
 from PIL import Image
 import os
-
+import numpy as np
 import datasets.transforms as T
 
+#random.seed(123456)
+np.random.seed(123456)
 
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks):
@@ -27,12 +29,20 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         coco = self.coco
         img_id = self.ids[idx]
         ann_ids = coco.getAnnIds(imgIds=img_id)
-        target = coco.loadAnns(ann_ids)
+        targets = coco.loadAnns(ann_ids)
+        target_ind = np.random.randint(0, len(targets))  # choose index of a specific target
+        target = targets[target_ind]
+        # choose index of a target search frame. NOTE: this may result in target and search being the same image!!!
+        search_ind = np.random.randint(target['frames_unique_id'].index(img_id), len(target['frames_unique_id']))
+        target['seach_image_id'] = target['frames_unique_id'][search_ind]
+        target['search_image_name'] = target['fr_in_vid'][search_ind]
+        target['search_bbox'] = target['bboxes'][target['search_image_name']]
         path = coco.loadImgs(img_id)[0]['file_name']
-        assert path == target[0]['image_name']
+        assert target['image_name'].startswith(path)
 
-        template_image = Image.open(os.path.join(self.root, target[0]['video_name'], target[0]['template_image_name'])).convert('RGB')
-        search_image = Image.open(os.path.join(self.root, target[0]['video_name'], target[0]['image_name'])).convert('RGB')
+        image_type = os.path.splitext(target['image_name'])[1]
+        template_image = Image.open(os.path.join(self.root, target['video_name'], target['image_name'])).convert('RGB')
+        search_image = Image.open(os.path.join(self.root, target['video_name'], target['search_image_name']+image_type)).convert('RGB')
 
         target = {'image_id': img_id, 'annotations': target}
         img = [template_image, search_image]
@@ -71,11 +81,11 @@ class ConvertCocoPolysToMask(object):
 
         anno = target["annotations"]
 
-        assert len(anno) == 1  # only one object per annotation
-        anno = anno[0]
+        #assert len(anno) == 1  # only one object per annotation
+        #anno = anno[0]
         #anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
 
-        boxes = [anno["template_bbox"], anno["bbox"]]
+        boxes = [anno["bbox"], anno["search_bbox"]]
         # guard against no boxes via resizing
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
         boxes[:, 2:] += boxes[:, :2]
@@ -157,7 +167,7 @@ def build(image_set, args):
     mode = 'instances'
     PATHS = {
         "train": (image_root / "train" / "JPEGImages", json_root / "train.json"),
-        "val": (image_root / "train" / "JPEGImages",json_root / "valid.json")
+        "val": (image_root / "train" / "JPEGImages", json_root / "val.json")
     }
 
     img_folder, ann_file = PATHS[image_set]

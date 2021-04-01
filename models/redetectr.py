@@ -32,6 +32,9 @@ from .transformer import build_transformer
 # 11. think of appropriate augmentation
 # 12. set image to a fixed size - currently 640*480
 # 13. parametrize bbox_embed from image size
+# 14. annotation passed to REDETECTR should contain bbox of all templates in batch, on the other hand annotations
+#     passed to criterion should contain bbox of all search in the batch for the loss calculation. ADD to annotations
+#      "search_boxes" and "template_boxes" keys
 
 class REDETECTR(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -107,6 +110,14 @@ class REDETECTR(nn.Module):
         # as a dict having both a Tensor and a list.
         return [{'pred_logits': a, 'pred_boxes': b}
                 for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
+
+    def gen_memory_mask(self, template_boxes, shape):
+        # traverse through template boxes and generate a mask for each
+        assert len(template_boxes) == shape[0]  # make sure that the number of boxes is the same as batch size
+        # assumes shape NxCxHxW
+        bs, c, h, w = shape
+        memory_mask = torch.zeros(shape)
+        #template_bbox = box_ops.box_cxcywh_to_xyxy(samples.anno[0])
 
 
 class SetCriterion(nn.Module):

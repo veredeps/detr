@@ -18,8 +18,8 @@ from models import build_model
 from models import build_redetectr_model
 from models.redetectr import build_from_detr
 
-from mlflow import log_metric, log_param, log_artifacts
-import git
+#from mlflow import log_metric, log_param, log_artifacts
+#import git
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -83,10 +83,10 @@ def get_args_parser():
                         help="Relative classification weight of the no-object class")
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
+    parser.add_argument('--dataset_file', default='youtube')
     parser.add_argument('--coco_path', type=str)
-    parser.add_argument('--youtube_json_path', type=str)
-    parser.add_argument('--youtube_image_path', type=str)
+    parser.add_argument('--youtube_json_path', type=str, default='')
+    parser.add_argument('--youtube_image_path', type=str, default='')
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -127,7 +127,7 @@ def main(args):
     random.seed(seed)
 
     dataset_train = build_dataset(image_set='train', args=args)
-    #dataset_train.__getitem__(0)
+    dataset_train.__getitem__(112)
     dataset_val = build_dataset(image_set='val', args=args)
 
     if args.resume_type == 'DETR':
@@ -275,24 +275,24 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
 
-    if not args.dont_test_dirty_repo:  # we need this because mlflow stores git hash
-        r = git.Repo('')
-        if r.is_dirty():
-            print('\033[91m')
-            print('----------------------------------------------')
-            print('repo is dirty, do you wish to continue [y/n]?')
-            print('----------------------------------------------')
-            print('\033[0m')
-            ans = input()
-            if ans != 'y':
-                exit()
+    #if not args.dont_test_dirty_repo:  # we need this because mlflow stores git hash
+    #    r = git.Repo('')
+    #    if r.is_dirty():
+    #        print('\033[91m')
+    #        print('----------------------------------------------')
+    #        print('repo is dirty, do you wish to continue [y/n]?')
+    #        print('----------------------------------------------')
+    #        print('\033[0m')
+    #        ans = input()
+    #        if ans != 'y':
+    #            exit()
 
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    for k, v in vars(args).items():
-        log_param(k, v)
+    #for k, v in vars(args).items():
+    #    log_param(k, v)
 
     main(args)
 
-    if args.output_dir:
-        log_artifacts(args.output_dir)
+    #if args.output_dir:
+    #    log_artifacts(args.output_dir)
